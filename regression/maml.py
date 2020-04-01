@@ -15,6 +15,7 @@ import utils
 import tasks_sine, tasks_celebA
 from logger import Logger
 from maml_model import MamlModel
+from cavia_model import CaviaModel
 
 
 def run(args, log_interval=5000, rerun=False):
@@ -66,7 +67,7 @@ def run(args, log_interval=5000, rerun=False):
     logger.best_valid_model = copy.deepcopy(model_outer)
 
     for i_iter in range(args.n_iter):
-
+        #meta_train_error = 0.0
         # copy weights of network
         copy_weights = [w.clone() for w in model_outer.weights]
         copy_biases = [b.clone() for b in model_outer.biases]
@@ -87,12 +88,11 @@ def run(args, log_interval=5000, rerun=False):
 
             # get data for current task
             train_inputs = task_family_train.sample_inputs(args.k_meta_train, args.use_ordered_pixels).to(args.device)
-
+            
             for _ in range(args.num_inner_updates):
 
                 # make prediction using the current model
                 outputs = model_inner(train_inputs)
-
                 # get targets
                 targets = target_functions[t](train_inputs)
 
@@ -135,6 +135,9 @@ def run(args, log_interval=5000, rerun=False):
             # compute loss (will backprop through inner loop)
             loss_meta = F.mse_loss(test_outputs, test_targets)
 
+
+            #meta_train_error += loss_meta.item()
+
             # compute gradient w.r.t. *outer model*
             task_grads = torch.autograd.grad(loss_meta,
                                              model_outer.weights + model_outer.biases + [model_outer.task_context])
@@ -157,11 +160,15 @@ def run(args, log_interval=5000, rerun=False):
         meta_gradient[i + j + 2] = 0
 
         # do update step on outer model
+	
         meta_optimiser.step()
-
+        #if i_iter % 200 == 0:
+         #   print('\n')
+          #  print('Iteration', i_iter)
+           # print('Meta Train Error', meta_train_error / args.tasks_per_metaupdate)
         # ------------ logging ------------
 
-        if i_iter % log_interval == 0:
+        if i_iter % log_interval == 0:# and i_iter > 0:
 
             # evaluate on training set
             loss_mean, loss_conf = eval(args, copy.copy(model_outer), task_family=task_family_train,

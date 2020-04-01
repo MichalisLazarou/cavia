@@ -5,6 +5,7 @@ import os
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 from PIL import Image
 from torchvision.transforms import transforms
@@ -29,14 +30,14 @@ class CelebADataset:
 
         self.device = device
 
-        if os.path.isdir('/home/scratch/luiraf/work/data/celeba/'):
-            data_root = '/home/scratch/luiraf/work/data/celeba/'
+        if os.path.isdir('/home/michalislazarou/PhD/l2l_mirror/examples/vision/celeba/'):
+            data_root = '/home/michalislazarou/PhD/l2l_mirror/examples/vision/celeba/'
         else:
             raise FileNotFoundError('Can\'t find celebrity faces.')
 
         self.code_root = os.path.dirname(os.path.realpath(__file__))
-        self.imgs_root = os.path.join(data_root, 'Img/img_align_celeba/')
-        self.imgs_root_preprocessed = os.path.join(data_root, 'Img/img_align_celeba_preprocessed/')
+        self.imgs_root = os.path.join(data_root, 'img_align_celeba/')
+        self.imgs_root_preprocessed = os.path.join(data_root, 'img_align_celeba_preprocessed/')
         if not os.path.isdir(self.imgs_root_preprocessed):
             os.mkdir(self.imgs_root_preprocessed)
         self.data_split_file = os.path.join(data_root, 'Eval/list_eval_partition.txt')
@@ -141,11 +142,18 @@ class CelebADataset:
         for i, img_path in enumerate(task_family_train.image_files[:6] + task_family_test.image_files[:6]):
 
             # randomly pick image
-            img = task_family_train.get_image(img_path)
+            if i<6:
+               img = task_family_train.get_image(img_path)
             # get target function
-            target_func = task_family_train.get_target_function(img)
+               target_func = task_family_train.get_target_function(img)
             # pick data points for training
-            pixel_inputs = task_family_train.sample_inputs(args.k_shot_eval, args.use_ordered_pixels)
+               pixel_inputs = task_family_train.sample_inputs(args.k_shot_eval, args.use_ordered_pixels)
+            else:
+               img = task_family_test.get_image(img_path)
+            # get target function
+               target_func = task_family_test.get_target_function(img)
+            # pick data points for training
+               pixel_inputs = task_family_test.sample_inputs(args.k_shot_eval, args.use_ordered_pixels)           
             pixel_targets = target_func(pixel_inputs)
             # update model
             if not args.maml:
@@ -168,9 +176,10 @@ class CelebADataset:
                     model.task_context = model.task_context - args.lr_inner * grads[k + j + 2].detach()
 
             # plot context
+            #print(img.cpu())
             plt.subplot(6, 6, (i % 6) * 6 + 1 + int(i > 5) * 3)
             # img = (img + 1) / 2
-            plt.imshow(img)
+            plt.imshow(img.cpu())
             plt.xticks([])
             plt.yticks([])
 
@@ -181,7 +190,8 @@ class CelebADataset:
             pixel_inputs *= 32
             pixel_inputs = pixel_inputs.long()
             img_copy[pixel_inputs[:, 0], pixel_inputs[:, 1]] = img[pixel_inputs[:, 0], pixel_inputs[:, 1]]
-            plt.imshow(img_copy)
+            #print(img_copy.cpu())
+            plt.imshow(img_copy.cpu())
             plt.xticks([])
             plt.yticks([])
 
@@ -194,9 +204,11 @@ class CelebADataset:
             plt.subplot(6, 6, (i % 6) * 6 + 3 + int(i > 5) * 3)
             input_range = task_family_train.get_input_range()
             img_pred = model(input_range).view(task_family_train.img_size).cpu().detach().numpy()
+          #  print(i,img_pred)
             # img_pred = (img_pred + 1) / 2
             img_pred[img_pred < 0] = 0
             img_pred[img_pred > 1] = 1
+           # print(i, " after ",img_pred)
             plt.imshow(img_pred)
             plt.xticks([])
             plt.yticks([])
@@ -214,3 +226,66 @@ class CelebADataset:
                                                                                int(10 * args.lr_inner),
                                                                                i_iter))
         plt.close()
+
+class CelebNet(nn.Module):
+     def __init__(self, n_inputs, n_hidden, n_outputs, size_hidden, device):
+        super(CelebNet,self).__init__()
+       # self.input = nn.Linear(n_inputs, size_hidden)
+        #self.hidden = nn.Linear(size_hidden, size_hidden)
+        #self.output = nn.Linear(size_hidden, n_outputs)
+        #self.n_hidden = n_hidden
+        self.task_context = torch.zeros(size_hidden).to(device)
+        self.task_context.requires_grad = True
+        self.net=nn.Sequential(OrderedDict([
+            ('l1',nn.Linear(n_inputs + size_hidden, size_hidden)),
+            ('relu1',nn.ReLU()),
+            ('l2',nn.Linear(size_hidden, size_hidden)),
+            ('relu2',nn.ReLU()),
+            ('l3',nn.Linear(size_hidden, size_hidden)),
+            ('relu3',nn.ReLU()),
+            ('l4',nn.Linear(size_hidden, size_hidden)),
+            ('relu4',nn.ReLU()),
+            ('l5',nn.Linear(size_hidden, size_hidden)),
+            ('relu5',nn.ReLU()),
+            ('l6',nn.Linear(size_hidden, n_outputs)),
+        ]))
+    
+
+     def forward(self,x):
+        #x = F.relu(self.input(x))
+        #for i in range(self.n_hidden - 1):
+        #     x = F.relu(self.hidden(x))
+       # x = F.relu(self.output(x))
+        #return x
+      if len(self.task_context) != 0:
+            x = torch.cat((x, self.task_context.expand(x.shape[0], -1)), dim=1)
+      else:
+            x = torch.cat((x, self.task_context))
+      return self.net(x)
+
+def accuracy(predictions, targets):
+    predictions = predictions.argmax(dim=1).view(targets.shape)
+    return (predictions == targets).sum().float() / targets.size(0)
+
+def fast_adapt(x, y, alpha, learner, loss, adaptation_steps, shots, device):
+    data, labels = x.to(device), y.to(device)
+   
+    # Separate data into adaptation/evalutation sets
+    adaptation_indices = torch.zeros(data.size(0)).byte()
+    adaptation_indices[torch.arange(shots) * 2] = 1
+    adaptation_data, adaptation_labels = data[adaptation_indices], labels[adaptation_indices]
+    evaluation_data, evaluation_labels = data[1 - adaptation_indices], labels[1 - adaptation_indices]
+
+    #Adapt the model
+    for step in range(adaptation_steps):
+        train_error = loss(learner(adaptation_data), adaptation_labels)
+        with torch.no_grad():
+             grads=list(torch.autograd.grad(train_error, learner.parameters()))
+            # print("step:", step," ",grads)
+             for p, t in zip(learner.parameters(), grads):
+                 p.data = p.data - alpha*t
+        
+    # Evaluate the adapted model
+    predictions = learner(evaluation_data)
+    valid_error = loss(predictions, evaluation_labels)
+    return valid_error
