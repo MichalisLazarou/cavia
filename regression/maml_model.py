@@ -8,6 +8,106 @@ import torch.nn.functional as F
 from torch import nn
 
 
+
+class TransformerNet(nn.Module):
+     def __init__(self, n_inputs, n_hidden, size_hidden, n_o, device):
+        super(TransformerNet,self).__init__()
+        #self.task_context = torch.zeros(size_hidden).to(device)
+       # self.task_context.requires_grad = True #maybe break net into two, similar to CAVIA
+        self.net=nn.Sequential(OrderedDict([
+            ('l1',nn.Linear(n_inputs, size_hidden)),
+            ('relu1',nn.ReLU()),
+            ('l2',nn.Linear(size_hidden, size_hidden)),
+            ('relu2',nn.ReLU()),
+            ('l3',nn.Linear(size_hidden, size_hidden)),
+        ]))
+    
+
+     def forward(self,x):
+     #   if len(self.task_context) != 0:
+      #      x = torch.cat((x, self.task_context.expand(x.shape[0], -1)), dim=1)
+       # else:
+        #    x = torch.cat((x, self.task_context))
+        return self.net(x)
+
+class FCNet(nn.Module):
+     def __init__(self, n_inputs, n_hidden, size_hidden, n_out):
+        super(FCNet, self).__init__()
+
+        # fully connected layers
+        self.fc_layers = nn.ModuleList()
+        self.fc_layers.append(nn.Linear(n_inputs, size_hidden))
+        for k in range(n_hidden - 2):
+            self.fc_layers.append(nn.Linear(size_hidden, size_hidden))
+        self.fc_layers.append(nn.Linear(size_hidden, n_out))
+
+        # context parameters (note that these are *not* registered parameters of the model!)
+        #self.num_context_params = num_context_params
+        #self.context_params = None
+        #self.reset_context_params()
+
+     def forward(self, x):
+
+        # concatenate input with context parameters
+        #x = torch.cat((x, self.context_params.expand(x.shape[0], -1)), dim=1)
+
+        for k in range(len(self.fc_layers) - 1):
+            x = F.relu(self.fc_layers[k](x))
+        y = self.fc_layers[-1](x)
+
+        return y
+
+def transformer_loss(L0, L1, model, device):
+    params = [w for w in model.weights] + [b for b in model.biases] + [model.task_context]
+    gradients0 = torch.autograd.grad(L0, params, retain_graph=True, create_graph=True)
+    gradients1 = torch.autograd.grad(L1, params, retain_graph=True, create_graph=True)
+    loss = torch.zeros(1).to(device)
+    for i in range(len(gradients0)):
+        a = torch.flatten(gradients0[i].clamp_(-10, 10)).to(device)
+        b = torch.flatten(gradients1[i].clamp_(-10, 10)).to(device)
+        product = torch.dot(a, b)
+        loss = loss - torch.sum(product)
+    divisor = norm_tensorlist(gradients0, device)*norm_tensorlist(gradients1, device)
+    loss = torch.div(loss , divisor)
+    return loss
+
+def cosine_loss(L0, L1, model, device):
+    params = [w for w in model.weights] + [b for b in model.biases] + [model.task_context]
+    gradients0 = torch.autograd.grad(L0, params, retain_graph=True, create_graph=True)
+    gradients1 = torch.autograd.grad(L1, params, retain_graph=True, create_graph=True)
+    criterion = nn.CosineEmbeddingLoss().to(device)
+    mask = torch.ones(1).to(device)
+    views1 =[]
+    views2 = []
+    for i in range(len(gradients0)):
+        view1 = gradients0[i].clamp_(-10, 10).view(-1, 1).to(device)
+        view2 = gradients1[i].clamp_(-10, 10).view(-1, 1).to(device)
+        views1.append(view1)
+        views2.append(view2)
+    grad0 = torch.cat(views1, 0).to(device)
+    grad1 = torch.cat(views2, 0).to(device)
+    loss = criterion(grad0, grad1, mask)
+    return loss
+
+def phi_gradients(model, device):
+    listOfGradients = []
+    for p in model.parameters():
+        listOfGradients.append(torch.zeros(list(p.size())).to(device))
+    return listOfGradients
+
+def norm_tensorlist(T1, device):
+    sum_powers_T1 = torch.zeros(1).to(device)
+    for i in range(len(T1)):
+        sum_powers_T1 = sum_powers_T1 + torch.sum(torch.pow(T1[i], 2))
+    return torch.sqrt(sum_powers_T1)
+
+
+
+#######----------------------------------------------------------------------------------------------------
+##
+##           Luisa's stuff
+##
+######-----------------------------------------------------------------------------------------------------
 class MamlModel(nn.Module):
     def __init__(self,
                  n_inputs,

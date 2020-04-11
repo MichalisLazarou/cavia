@@ -136,7 +136,7 @@ class CelebADataset:
                     test_imgs.append(row[0])
         return train_imgs, valid_imgs, test_imgs
 
-    def visualise(self, task_family_train, task_family_test, model, args, i_iter):
+    def visualise(self, task_family_train, task_family_test, model, args, i_iter, transformer):
         plt.figure(figsize=(14, 14))
 
         for i, img_path in enumerate(task_family_train.image_files[:6] + task_family_test.image_files[:6]):
@@ -165,7 +165,7 @@ class CelebADataset:
                     model.context_params = model.context_params - args.lr_inner * grad
             else:
                 for _ in range(args.num_inner_updates):
-                    pixel_pred = model(pixel_inputs)
+                    pixel_pred = model(transformer(pixel_inputs))
                     loss = F.mse_loss(pixel_pred, pixel_targets)
                     params = [w for w in model.weights] + [b for b in model.biases] + [model.task_context]
                     grads = torch.autograd.grad(loss, params)
@@ -203,7 +203,7 @@ class CelebADataset:
             # predict
             plt.subplot(6, 6, (i % 6) * 6 + 3 + int(i > 5) * 3)
             input_range = task_family_train.get_input_range()
-            img_pred = model(input_range).view(task_family_train.img_size).cpu().detach().numpy()
+            img_pred = model(transformer(input_range)).view(task_family_train.img_size).cpu().detach().numpy()
           #  print(i,img_pred)
             # img_pred = (img_pred + 1) / 2
             img_pred[img_pred < 0] = 0
@@ -218,7 +218,8 @@ class CelebADataset:
 
         plt.tight_layout()
         plt.savefig('{}/celeba_result_plots/{}_c{}_k{}_o{}_u{}_lr{}_{}'.format(self.code_root,
-                                                                               int(args.maml),
+                                                                               #int(args.maml),
+                                                                               'ga-maml',
                                                                                args.num_context_params,
                                                                                args.k_meta_train,
                                                                                args.use_ordered_pixels,
