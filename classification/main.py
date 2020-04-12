@@ -7,6 +7,7 @@ import torch
 from torch.nn import functional as F
 from torch.utils.data import DataLoader
 
+import time
 import arguments
 import utils
 from dataset_miniimagenet import MiniImagenet
@@ -16,6 +17,19 @@ from models import CondConvNet
 
 def run(args, num_workers=1, log_interval=100, verbose=True, save_path=None):
     utils.set_seed(args.seed)
+
+    # see if we already ran this experiment
+    code_root = os.path.dirname(os.path.realpath(__file__))
+    if not os.path.isdir('{}/{}_result_files/'.format(code_root, 'Mini-imagenet')):
+        os.mkdir('{}/{}_result_files/'.format(code_root, 'Mini-imagenet'))
+    save_path = '{}/{}_result_files/'.format(code_root, 'Mini-imagenet') + utils.get_path_from_args(args)
+
+    if os.path.exists(save_path + '.pkl') and not rerun:
+        return utils.load_obj(save_path)
+
+    start_time = time.time()
+    utils.set_seed(args.seed)
+
 
     # ---------------------------------------------------------
     # -------------------- training ---------------------------
@@ -45,7 +59,7 @@ def run(args, num_workers=1, log_interval=100, verbose=True, save_path=None):
 
     iter_counter = 0
     while iter_counter < args.n_iter:
-
+        print(iter_counter)
         # batchsz here means total episode number
         dataset_train = MiniImagenet(mode='train',
                                      n_way=args.n_way,
